@@ -1,0 +1,12 @@
+groups:
+  - name: kafka_alerts
+    rules:
+      # Báo động khẩn cấp ngay khi có tin nhắn rơi vào hàng đợi Dead Letter Queue
+      - alert: DeadLetterQueueReceived
+        expr: increase(kafka_topic_partition_current_offset{topic="dead_letter"}[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Co message moi vao Dead Letter Queue"
+          description: "Topic dead_letter vua nhan them message lỗi. Kiem tra Kafka UI tai http://localhost:8080 de xử lý thủ công."
