@@ -4,7 +4,7 @@ const { Client } = require('pg');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const geminiModel = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' }, { apiVersion: 'v1' });
 
 // Khởi tạo kết nối PostgreSQL Database
 const db = new Client({ connectionString: process.env.DB_URL });
@@ -46,8 +46,22 @@ Chỉ trả về JSON thuần, không giải thích. Ví dụ: {"intent":"compla
         }
     } catch (err) {
         console.error('[GEMINI ERROR]', err.message);
+        console.log('[AI] Dùng keyword fallback...');
+        return keywordAnalyze(message);
     }
 
+    return keywordAnalyze(message);
+}
+
+function keywordAnalyze(message) {
+    const msg = message.toLowerCase();
+    const positiveWords = ['thích', 'tốt', 'tuyệt', 'nhanh', 'hay', 'oke', 'ok', 'ngon', 'chất', 'đỉnh', 'cảm ơn', 'cám ơn', 'hài lòng', 'ủng hộ', 'recommend', 'yêu'];
+    const negativeWords = ['thất vọng', 'tệ', 'chán', 'tức', 'bực', 'lâu', 'chờ', 'hỏng', 'lỗi', 'vỡ', 'giả', 'fake', 'không được', 'không tốt', 'kém'];
+    const priceWords = ['giá', 'bao nhiêu', 'tiền', 'phí', 'cost', 'price', 'báo giá', 'mua', 'order'];
+
+    if (positiveWords.some(w => msg.includes(w))) return { intent: 'compliment', sentiment: 'positive' };
+    if (negativeWords.some(w => msg.includes(w))) return { intent: 'complaint', sentiment: 'negative' };
+    if (priceWords.some(w => msg.includes(w))) return { intent: 'ask_price', sentiment: 'neutral' };
     return { intent: 'interact', sentiment: 'neutral' };
 }
 
@@ -104,6 +118,8 @@ async function handleEvent(event) {
             action: action,
             page_id: event.page_id,
             comment_id: event.comment_id,
+            user_id: event.user_id,
+            user_name: event.user_name,
             reply_text: replyText,
             intent: spamStatus === 'spam_link' ? 'spam' : 'analyzed',
             sentiment: spamStatus === 'spam_link' ? 'neutral' : 'analyzed',
@@ -128,7 +144,7 @@ async function start() {
     await producer.connect();
 
     // Consume dữ liệu từ topic đầu vào raw_events
-    await consumer.subscribe({ topic: 'raw_events', fromBeginning: true });
+    await consumer.subscribe({ topic: 'raw_events', fromBeginning: false });
     console.log(' Core Service đang lắng nghe dữ liệu từ Kafka...');
 
     await consumer.run({

@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 const express = require('express');
 const axios = require('axios');
 const { Kafka } = require('kafkajs');
@@ -45,9 +45,21 @@ async function callFacebookGraphAPI(command) {
             throw new Error('Facebook API Timeout (500 Internal Error)');
         }
 
-        // --- ĐOẠN CODE GỌI API THẬT (Nếu có Token thật) ---
-        // await axios.post(`https://graph.facebook.com/v26.0/${command.comment_id}/replies`, { message: command.reply_text, access_token: '...' });
-        
+        // --- GỌI FACEBOOK GRAPH API THẬT ---
+        const accessToken = process.env.FB_PAGE_ACCESS_TOKEN;
+        if (command.action === 'hide') {
+            await axios.post(`https://graph.facebook.com/v20.0/${command.comment_id}`,
+                { is_hidden: true },
+                { params: { access_token: accessToken } }
+            );
+        } else {
+            const tag = command.user_id ? `@[${command.user_id}] ` : (command.user_name ? `${command.user_name} ` : '');
+            await axios.post(`https://graph.facebook.com/v20.0/${command.comment_id}/comments`,
+                { message: `${tag}${command.reply_text}` },
+                { params: { access_token: accessToken } }
+            );
+        }
+
         // Nếu gọi thành công, reset bộ đếm lỗi của Circuit Breaker
         if (circuitBreaker.state === 'HALF-OPEN') {
             circuitBreaker.state = 'CLOSED';
@@ -58,7 +70,8 @@ async function callFacebookGraphAPI(command) {
     } catch (err) {
         // Xử lý đếm lỗi cho Circuit Breaker
         circuitBreaker.failureCount++;
-        console.error(`❌ [LỖI GỌI FB] Lần thất bại liên tiếp thứ: ${circuitBreaker.failureCount}`);
+        const fbError = err.response?.data?.error || err.message;
+        console.error(`❌ [LỖI GỌI FB] Lần thất bại thứ: ${circuitBreaker.failureCount} | Chi tiết:`, JSON.stringify(fbError));
         
         if (circuitBreaker.failureCount >= circuitBreaker.failureThreshold) {
             circuitBreaker.state = 'OPEN';
@@ -123,8 +136,19 @@ async function start() {
 
     await consumer.run({
         eachMessage: async ({ topic, message }) => {
-            const command = JSON.parse(message.value.toString());
-            await processCommand(command, topic);
+            if (!message.value) return;
+            const raw = message.value.toString().trim();
+            if (!raw) return;
+            try {
+                const command = JSON.parse(raw);
+                if (!command.comment_id || !command.action) {
+                    console.warn('[SKIP] Message thiếu comment_id/action, bỏ qua.');
+                    return;
+                }
+                await processCommand(command, topic);
+            } catch (e) {
+                console.warn('[SKIP] Message lỗi tại offset', message.offset, '-', e.message);
+            }
         },
     });
 
